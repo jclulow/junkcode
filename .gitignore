@@ -1,0 +1,9 @@
+n1
+e1
+s1
+m1
+*.o
+lib/
+core
+.*.swp
+.swp
