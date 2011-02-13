@@ -38,6 +38,7 @@ struct connstate {
   struct bufferevent *bev;
   int req_state;
   struct frame *incoming;
+  char *sessionid;
 };
 
 void
@@ -84,8 +85,14 @@ process_frame(struct connstate *cs, struct frame *f) {
   struct evbuffer *output = bufferevent_get_output(cs->bev);
   fprintf(stderr, "DEBUG: processing frame: '%s'\n", f->type);
   if (strcmp(f->type, "CONNECTED") == 0) {
-#define TOSEND "SUBSCRIBE\ndestination: /topic/notifications\nack: auto\n\n"
+#define TOSEND "SUBSCRIBE\nreceipt: johnfrost\ndestination: /topic/notifications\nack: auto\n\n"
     evbuffer_add(output, TOSEND, sizeof(TOSEND) + 1);
+    if (frame_get_header(f, "session") != NULL) {
+      fprintf(stderr, "INFO: session id == %s\n", frame_get_header(f, "session"));
+      cs->sessionid = talloc_strdup(cs, frame_get_header(f, "session"));
+    } else {
+      fprintf(stderr, "INFO: no session id ??!\n");
+    }
 #undef  TOSEND
   } else if (strcmp(f->type, "MESSAGE") == 0) {
     fprintf(stderr, "\n===MESSAGE==================================\n");
@@ -93,6 +100,13 @@ process_frame(struct connstate *cs, struct frame *f) {
     fprintf(stderr,   "--------------------------------------------\n");
     fprintf(stderr, "%s", f->body);
     fprintf(stderr, "\n^^=MESSAGE================================^^\n");
+    fflush(stderr);
+  } else if (strcmp(f->type, "ERROR") == 0) {
+    fprintf(stderr, "\n===ERROR====================================\n");
+    fprintf(stderr, "  msg: %s\n", frame_get_header(f, "message"));
+    fprintf(stderr,   "--------------------------------------------\n");
+    fprintf(stderr, "%s", f->body);
+    fprintf(stderr, "\n^^=ERROR==================================^^\n");
     fflush(stderr);
   }
 }
@@ -125,17 +139,17 @@ evstomp_readcb(struct bufferevent *bev, void *arg)
 
   /*while ((n = evbuffer_remove(input, buf, sizeof(buf))) > 0) { */
   while (cont) {
-    fprintf(stderr, "DEBUG: top of while\n");
+    // XXX fprintf(stderr, "DEBUG: top of while\n");
     switch (cs->req_state) {
       case 1:
         lineout = evbuffer_readln(input, NULL, EVBUFFER_EOL_CRLF);
         if (lineout == NULL) {
           cont = 0;
         } else if (strlen(lineout) == 0) {
-          fprintf(stderr, "DEBUG: ate blank line at the end of a message...\n");
+          // XXX fprintf(stderr, "DEBUG: ate blank line at the end of a message...\n");
           free(lineout);
         } else {
-          fprintf(stderr, "INFO: server message type '%s'\n", lineout);
+          // XXX fprintf(stderr, "INFO: server message type '%s'\n", lineout);
           talloc_free(cs->incoming);
           cs->incoming = talloc_zero(cs, struct frame);
           cs->incoming->type = talloc_strdup(cs->incoming, lineout);
