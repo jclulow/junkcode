@@ -49,7 +49,7 @@ frame_set_header(struct frame *f, char* name, char* value)
     if (strcmp(name, f->headers[pos]->name) == 0) {
       // deallocate old string, replace it with new one:
       talloc_free(f->headers[pos]->value);
-      f->headers[pos]->value = talloc_strdup(f, value);
+      f->headers[pos]->value = talloc_strdup(f->headers[pos], value);
       return;
     }
   }
@@ -87,13 +87,13 @@ process_frame(struct connstate *cs, struct frame *f) {
   if (strcmp(f->type, "CONNECTED") == 0) {
 #define TOSEND "SUBSCRIBE\nreceipt: johnfrost\ndestination: /topic/notifications\nack: auto\n\n"
     evbuffer_add(output, TOSEND, sizeof(TOSEND));
+#undef  TOSEND
     if (frame_get_header(f, "session") != NULL) {
       fprintf(stderr, "INFO: session id == %s\n", frame_get_header(f, "session"));
       cs->sessionid = talloc_strdup(cs, frame_get_header(f, "session"));
     } else {
       fprintf(stderr, "INFO: no session id ??!\n");
     }
-#undef  TOSEND
   } else if (strcmp(f->type, "MESSAGE") == 0) {
     fprintf(stderr, "\n===MESSAGE==================================\n");
     fprintf(stderr, "  dst: %s\n", frame_get_header(f, "destination"));
