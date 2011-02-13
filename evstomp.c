@@ -86,7 +86,7 @@ process_frame(struct connstate *cs, struct frame *f) {
   fprintf(stderr, "DEBUG: processing frame: '%s'\n", f->type);
   if (strcmp(f->type, "CONNECTED") == 0) {
 #define TOSEND "SUBSCRIBE\nreceipt: johnfrost\ndestination: /topic/notifications\nack: auto\n\n"
-    evbuffer_add(output, TOSEND, sizeof(TOSEND) + 1);
+    evbuffer_add(output, TOSEND, sizeof(TOSEND));
     if (frame_get_header(f, "session") != NULL) {
       fprintf(stderr, "INFO: session id == %s\n", frame_get_header(f, "session"));
       cs->sessionid = talloc_strdup(cs, frame_get_header(f, "session"));
@@ -97,6 +97,8 @@ process_frame(struct connstate *cs, struct frame *f) {
   } else if (strcmp(f->type, "MESSAGE") == 0) {
     fprintf(stderr, "\n===MESSAGE==================================\n");
     fprintf(stderr, "  dst: %s\n", frame_get_header(f, "destination"));
+    fprintf(stderr, "  len: %s\n", frame_get_header(f, "content-length"));
+    fprintf(stderr, "   id: %s\n", frame_get_header(f, "message-id"));
     fprintf(stderr,   "--------------------------------------------\n");
     fprintf(stderr, "%s", f->body);
     fprintf(stderr, "\n^^=MESSAGE================================^^\n");
@@ -213,31 +215,6 @@ evstomp_readcb(struct bufferevent *bev, void *arg)
   fprintf(stderr, "DEBUG: end of readcb\n");
 /*
   }*/
-}
-
-struct sockaddr
-*get_sa(char *name) {
-  char presbuf[INET6_ADDRSTRLEN];
-  struct addrinfo *infop = NULL, hint;
-  struct sockaddr_in *retaddr = malloc(sizeof(struct sockaddr_in));
-  int rc;
-  
-  bzero(&hint, sizeof(hint));
-  hint.ai_family = AF_INET;
-  hint.ai_socktype = SOCK_STREAM;
-  rc = getaddrinfo(name, "61613", &hint, &infop);
-  /*fprintf(stderr, "INFO: rc = %d\n", rc);*/
-  if (infop == NULL || infop->ai_family != AF_INET) {
-    fprintf(stderr, "sigh, couldnt find address.\n");
-    abort();
-  }
-  memcpy(retaddr, infop->ai_addr, sizeof(struct sockaddr_in));
-  /*fprintf(stderr, "INFO: got0 %s\n", inet_ntoa(retaddr->sin_addr));
-  fprintf(stderr, "INFO: got1 %s\n", inet_ntoa(
-    ((struct sockaddr_in*)(infop->ai_addr))->sin_addr
-  ));*/
-  freeaddrinfo(infop);
-  return (struct sockaddr *)retaddr;
 }
 
 struct evstomp_handle {
