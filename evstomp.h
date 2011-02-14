@@ -31,7 +31,6 @@ enum evstomp_event_type {
 
 struct header;
 struct frame;
-struct connstate;
 
 void frame_set_header(struct frame *f, char* name, char* value);
 const char * frame_get_header(struct frame *f, char* name);
