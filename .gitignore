@@ -7,3 +7,5 @@ lib/
 core
 .*.swp
 .swp
+evstomp_example
+sqlite_sandbox
