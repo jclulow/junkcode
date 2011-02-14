@@ -35,12 +35,20 @@ struct frame {
 };
 
 struct connstate {
+  struct evstomp_handle *handle;
   struct bufferevent *bev;
   int req_state;
   struct frame *incoming;
   char *sessionid;
-  void (*cbfunc)(enum evstomp_event_type, struct frame *);
+  void (*cbfunc)(struct evstomp_handle *, enum evstomp_event_type, struct frame *);
 };
+
+struct evstomp_handle {
+  struct event_base *base;
+  struct connstate *conn;
+  regex_t re_parse_header;
+};
+
 
 void
 frame_set_header(struct frame *f, char* name, char* value)
@@ -91,35 +99,20 @@ process_frame(struct connstate *cs, struct frame *f) {
   struct evbuffer *output = bufferevent_get_output(cs->bev);
   fprintf(stderr, "DEBUG: processing frame: '%s'\n", f->type);
   if (strcmp(f->type, "CONNECTED") == 0) {
-#define TOSEND "SUBSCRIBE\nreceipt: johnfrost\ndestination: /topic/notifications\nack: auto\n\n"
-    evbuffer_add(output, TOSEND, sizeof(TOSEND));
-#undef  TOSEND
     if (frame_get_header(f, "session") != NULL) {
-      fprintf(stderr, "INFO: session id == %s\n", frame_get_header(f, "session"));
       cs->sessionid = talloc_strdup(cs, frame_get_header(f, "session"));
-    } else {
-      fprintf(stderr, "INFO: no session id ??!\n");
+    }
+    if (cs->cbfunc != NULL) {
+      (*cs->cbfunc)(cs->handle, CONNECTED, f);
     }
   } else if (strcmp(f->type, "MESSAGE") == 0) {
     if (cs->cbfunc != NULL) { 
-      (*cs->cbfunc)(MESSAGE, f);
-    } else {
-      fprintf(stderr, "\n===MESSAGE==================================\n");
-      fprintf(stderr, "  dst: %s\n", frame_get_header(f, "destination"));
-      fprintf(stderr, "  len: %s\n", frame_get_header(f, "content-length"));
-      fprintf(stderr, "   id: %s\n", frame_get_header(f, "message-id"));
-      fprintf(stderr,   "--------------------------------------------\n");
-      fprintf(stderr, "%s", f->body);
-      fprintf(stderr, "\n^^=MESSAGE================================^^\n");
-      fflush(stderr);
+      (*cs->cbfunc)(cs->handle, MESSAGE, f);
     }
   } else if (strcmp(f->type, "ERROR") == 0) {
-    fprintf(stderr, "\n===ERROR====================================\n");
-    fprintf(stderr, "  msg: %s\n", frame_get_header(f, "message"));
-    fprintf(stderr,   "--------------------------------------------\n");
-    fprintf(stderr, "%s", f->body);
-    fprintf(stderr, "\n^^=ERROR==================================^^\n");
-    fflush(stderr);
+    if (cs->cbfunc != NULL) {
+      (*cs->cbfunc)(cs->handle, ERROR, f);
+    }
   }
 }
 
@@ -128,7 +121,6 @@ evstomp_eventcb(struct bufferevent *bev, short events, void *arg)
 {
   struct connstate* cs = arg;
   if (events & BEV_EVENT_CONNECTED) {
-    fprintf(stderr, "INFO: connected\n");
     cs->req_state = 1;
     cs->incoming = talloc_zero(cs, struct frame);
   } else if (events & BEV_EVENT_ERROR) {
@@ -151,17 +143,14 @@ evstomp_readcb(struct bufferevent *bev, void *arg)
 
   /*while ((n = evbuffer_remove(input, buf, sizeof(buf))) > 0) { */
   while (cont) {
-    // XXX fprintf(stderr, "DEBUG: top of while\n");
     switch (cs->req_state) {
       case 1:
         lineout = evbuffer_readln(input, NULL, EVBUFFER_EOL_CRLF);
         if (lineout == NULL) {
           cont = 0;
         } else if (strlen(lineout) == 0) {
-          // XXX fprintf(stderr, "DEBUG: ate blank line at the end of a message...\n");
           free(lineout);
         } else {
-          // XXX fprintf(stderr, "INFO: server message type '%s'\n", lineout);
           talloc_free(cs->incoming);
           cs->incoming = talloc_zero(cs, struct frame);
           cs->incoming->type = talloc_strdup(cs->incoming, lineout);
@@ -174,24 +163,25 @@ evstomp_readcb(struct bufferevent *bev, void *arg)
         if (lineout == NULL) {
           cont = 0;
         } else if (strlen(lineout) == 0) {
-          fprintf(stderr, "INFO: blank line received, end of %s header\n", 
-              cs->incoming->type);
           cs->req_state = 3;
         } else if (strstr(lineout, ":") != NULL) {
-          regex_t re;
-          regmatch_t m[5];
+#define REGMATCH_LEN 5
+          regmatch_t m[REGMATCH_LEN];
           char *a, *b;
-          fprintf(stderr, "INFO: regcomp() == %d\n", regcomp(&re, "[ ]*([^:]+)[ ]*:[ ]*(.+)[ ]*", REG_EXTENDED));
-          fprintf(stderr, "INFO: MSG %s: HDR '%s'\n", 
-              cs->incoming->type, lineout);
-          fprintf(stderr, "INFO: regexec() == %d\n", regexec(&re, lineout, 5, m, 0));
-          a = talloc_strndup(cs, lineout + m[1].rm_so, m[1].rm_eo - m[1].rm_so);
-          b = talloc_strndup(cs, lineout + m[2].rm_so, m[2].rm_eo - m[2].rm_so);
-          fprintf(stderr, "INFO: m[0] = '%s'; m[1] = '%s'\n", a, b);
-          frame_set_header(cs->incoming, a, b);
-          talloc_free(a);
-          talloc_free(b);
-          regfree(&re);
+          if (regexec(&cs->handle->re_parse_header, lineout,
+              REGMATCH_LEN, m, 0) != 0) {
+            fprintf(stderr, "DEBUG: header line did not match regex: %s\n",
+                lineout);
+          } else {
+            a = talloc_strndup(cs, lineout + m[1].rm_so,
+                m[1].rm_eo - m[1].rm_so);
+            b = talloc_strndup(cs, lineout + m[2].rm_so,
+                m[2].rm_eo - m[2].rm_so);
+            frame_set_header(cs->incoming, a, b);
+            talloc_free(a);
+            talloc_free(b);
+	  }
+#undef REGMATCH_LEN
         } else {
           fprintf(stderr, "INFO: MSG %s: non-HDR '%s'\n", 
               cs->incoming->type, lineout);
@@ -207,34 +197,38 @@ evstomp_readcb(struct bufferevent *bev, void *arg)
             cs->incoming->body = talloc_size(cs->incoming, bufapos + 1);
             talloc_set_name_const(cs->incoming->body, "stomp msg body");
             evbuffer_remove(input, cs->incoming->body, bufapos + 1);
-            fprintf(stderr, "INFO: NUL FOUND IN BODY (pos %d)!\n", bufapos);
             break;
           }
         }
         if (cs->incoming->body != NULL) {
-          fprintf(stderr, "BODY: %s\n", cs->incoming->body);
           process_frame(cs, cs->incoming); /* XXX */
           cs->req_state = 1;
         } else {
-          fprintf(stderr, "INFO: NUL not found in body yet\n");
           cont = 0;
         }
         break;
     }
   }
-  fprintf(stderr, "DEBUG: end of readcb\n");
 /*
   }*/
 }
 
-struct evstomp_handle {
-  struct event_base *base;
-  struct connstate *conn;
-};
+int
+evstomp_subscribe(struct evstomp_handle *h, char *topic)
+{
+  char *tosend = talloc_asprintf(h, "SUBSCRIBE\ndestination: %s\nack: auto\n\n\0", topic);
+  int rc = evbuffer_add(bufferevent_get_output(h->conn->bev), tosend, strlen(tosend) + 1);
+  talloc_free(tosend);
+  if (rc == 0)
+    return 0;
+  else
+    return -1;
+  /* XXX should ask for a RECEIPT and then track this RECEIPT to see if successful */
+}
 
 void
 evstomp_setcb(struct evstomp_handle *h, 
-    void (*cbfunc)(enum evstomp_event_type, struct frame *))
+    void (*cbfunc)(struct evstomp_handle *, enum evstomp_event_type, struct frame *))
 {
   h->conn->cbfunc = cbfunc;
 }
@@ -252,11 +246,18 @@ evstomp_init(struct event_base *base, char *hostname, int port)
     return NULL;
   }
   h->base = base;
+  if (regcomp(&h->re_parse_header, "[ ]*([^:]+)[ ]*:[ ]*(.+)[ ]*",
+      REG_EXTENDED) != 0) {
+    regfree(&h->re_parse_header);
+    talloc_free(h);
+    /* XXX regfree() this when we get evstomp_destroy() */
+  }
 
   h->conn = talloc_zero(h, struct connstate);
   if (h->conn == NULL) {
     return NULL;
   }
+  h->conn->handle = h;
 
   h->conn->bev = bufferevent_socket_new(base, -1, BEV_OPT_CLOSE_ON_FREE);
   if (h->conn->bev == NULL) {

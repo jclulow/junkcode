@@ -39,7 +39,13 @@ const char * frame_get_body(struct frame *f);
 
 struct evstomp_handle;
 struct evstomp_handle *evstomp_init(struct event_base *base, char *hostname, int port);
-void evstomp_setcb(struct evstomp_handle *h, void (*func)(enum evstomp_event_type, struct frame *));
+void evstomp_setcb(struct evstomp_handle *h, void (*func)(struct evstomp_handle *, enum evstomp_event_type, struct frame *));
+
+/*
+ * evstomp_subscribe():
+ *   SUBSCRIBE to a topic.  Returns 0 on success, -1 on failure.
+ */
+int evstomp_subscribe(struct evstomp_handle *h, char *topic);
 
 #endif /* __EVSTOMP_H__ */
 

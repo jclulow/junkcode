@@ -46,8 +46,12 @@ h_usr1(evutil_socket_t fd, short event, void *arg)
 }
 
 void
-cbf(enum evstomp_event_type et, struct frame *f) {
+cbf(struct evstomp_handle *h, enum evstomp_event_type et, struct frame *f) {
   switch (et) {
+    case CONNECTED:
+      fprintf(stderr, "CALLBACK: Connected, subscribing to the thing.\n");
+      evstomp_subscribe(h, "/topic/notifications");
+      break;
     case MESSAGE:
       fprintf(stderr, "CALLBACK: Message: %s ------------------\n"
               "%s\n-----------------------\n",
