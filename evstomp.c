@@ -39,6 +39,7 @@ struct connstate {
   int req_state;
   struct frame *incoming;
   char *sessionid;
+  void (*cbfunc)(enum evstomp_event_type, struct frame *);
 };
 
 void
@@ -80,6 +81,11 @@ frame_get_header(struct frame *f, char* name)
   return NULL;
 }
 
+const char *
+frame_get_body(struct frame *f) {
+  return f->body;
+}
+
 void
 process_frame(struct connstate *cs, struct frame *f) {
   struct evbuffer *output = bufferevent_get_output(cs->bev);
@@ -95,14 +101,18 @@ process_frame(struct connstate *cs, struct frame *f) {
       fprintf(stderr, "INFO: no session id ??!\n");
     }
   } else if (strcmp(f->type, "MESSAGE") == 0) {
-    fprintf(stderr, "\n===MESSAGE==================================\n");
-    fprintf(stderr, "  dst: %s\n", frame_get_header(f, "destination"));
-    fprintf(stderr, "  len: %s\n", frame_get_header(f, "content-length"));
-    fprintf(stderr, "   id: %s\n", frame_get_header(f, "message-id"));
-    fprintf(stderr,   "--------------------------------------------\n");
-    fprintf(stderr, "%s", f->body);
-    fprintf(stderr, "\n^^=MESSAGE================================^^\n");
-    fflush(stderr);
+    if (cs->cbfunc != NULL) { 
+      (*cs->cbfunc)(MESSAGE, f);
+    } else {
+      fprintf(stderr, "\n===MESSAGE==================================\n");
+      fprintf(stderr, "  dst: %s\n", frame_get_header(f, "destination"));
+      fprintf(stderr, "  len: %s\n", frame_get_header(f, "content-length"));
+      fprintf(stderr, "   id: %s\n", frame_get_header(f, "message-id"));
+      fprintf(stderr,   "--------------------------------------------\n");
+      fprintf(stderr, "%s", f->body);
+      fprintf(stderr, "\n^^=MESSAGE================================^^\n");
+      fflush(stderr);
+    }
   } else if (strcmp(f->type, "ERROR") == 0) {
     fprintf(stderr, "\n===ERROR====================================\n");
     fprintf(stderr, "  msg: %s\n", frame_get_header(f, "message"));
@@ -222,6 +232,13 @@ struct evstomp_handle {
   struct connstate *conn;
 };
 
+void
+evstomp_setcb(struct evstomp_handle *h, 
+    void (*cbfunc)(enum evstomp_event_type, struct frame *))
+{
+  h->conn->cbfunc = cbfunc;
+}
+
 struct evstomp_handle *
 evstomp_init(struct event_base *base, char *hostname, int port)
 {
@@ -236,11 +253,10 @@ evstomp_init(struct event_base *base, char *hostname, int port)
   }
   h->base = base;
 
-  h->conn = talloc(h, struct connstate);
+  h->conn = talloc_zero(h, struct connstate);
   if (h->conn == NULL) {
     return NULL;
   }
-  bzero(h->conn, sizeof(*h->conn));
 
   h->conn->bev = bufferevent_socket_new(base, -1, BEV_OPT_CLOSE_ON_FREE);
   if (h->conn->bev == NULL) {

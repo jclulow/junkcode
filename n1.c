@@ -45,6 +45,17 @@ h_usr1(evutil_socket_t fd, short event, void *arg)
   fflush(stderr);
 }
 
+void
+cbf(enum evstomp_event_type et, struct frame *f) {
+  switch (et) {
+    case MESSAGE:
+      fprintf(stderr, "CALLBACK: Message: %s ------------------\n"
+              "%s\n-----------------------\n",
+               frame_get_header(f, "destination"), frame_get_body(f));
+      break;
+  }
+}
+
 int
 main(int argc, char **argv)
 {
@@ -56,6 +67,7 @@ main(int argc, char **argv)
 
   base = event_base_new();
   h = evstomp_init(base, "atlantis.sysmgr.org", 61613);
+  evstomp_setcb(h, cbf);
   if (h == NULL) {
     fprintf(stderr, "Could not open stomp library.\n");
     abort();
