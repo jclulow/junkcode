@@ -8,13 +8,19 @@ LDFLAGS = -L $(TALLOC_DIR)/lib -L $(SQLITE_DIR)/lib -L ./lib -R '$$ORIGIN:$$ORIG
 sqlite_sandbox:	sqlite_sandbox.c
 	gcc -g $(CFLAGS) $(LDFLAGS) -ltalloc -lsqlite3 $< -o $@
 
-evstomp_example:	evstomp_example.c evstomp.o
-	gcc -g $(CFLAGS) $(LDFLAGS) -lnsl -lsocket -ltalloc -levent $< evstomp.o -o $@
+evstomp_example:	evstomp_example.c evstomp.o jmcstr.o
+	gcc -g $(CFLAGS) $(LDFLAGS) -lnsl -lsocket -ltalloc -levent $< evstomp.o jmcstr.o -o $@
 
 evstomp.o:	evstomp.c evstomp.h
 	gcc -g -c $(CFLAGS) $< -o $@
 
+jmcstr.o:	jmcstr.c jmcstr.h
+	gcc -g -c $(CFLAGS) $< -o $@
+
+jmcstr_example:	jmcstr_example.c jmcstr.o
+	gcc -g $(CFLAGS) $(LDFLAGS) -ltalloc $< jmcstr.o -o $@
+
 
 clean:
-	rm -f *.o evstomp_example sqlite_sandbox
+	rm -f *.o evstomp_example sqlite_sandbox jmcstr_example
 

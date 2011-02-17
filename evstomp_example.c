@@ -20,6 +20,7 @@
 #include <event2/buffer.h>
 #include <event2/util.h>
 
+#include "jmcstr.h"
 #include "evstomp.h"
 
 #define MAX_SIGINTS 1
@@ -46,6 +47,27 @@ h_usr1(evutil_socket_t fd, short event, void *arg)
 }
 
 void
+print_msg_body(const char *body)
+{
+  regex_t re_msg, re_sbj;
+  char **p, **s = jmcstr_split_lines(NULL, body);
+  char *msg = NULL, *sbj = NULL;
+  regcomp(&re_msg, "^Message: *(.*)$", REG_EXTENDED);
+  regcomp(&re_sbj, "^Subject: *(.*)$", REG_EXTENDED);
+  for (p = s; *p != NULL; p++) {
+    regmatch_t m[2];
+    if (regexec(&re_msg, *p, 2, m, 0) == 0) {
+      msg = talloc_strndup(s, *p + m[1].rm_so, m[1].rm_eo - m[1].rm_so);
+    } else if (regexec(&re_sbj, *p, 2, m, 0) == 0) {
+      sbj = talloc_strndup(s, *p + m[1].rm_so, m[1].rm_eo - m[1].rm_so);
+    }
+  }
+  fprintf(stderr, "CBMSG: sbj -> '%s'\n"
+                  "       msg -> '%s'\n", sbj, msg);
+  talloc_free(s);
+}
+
+void
 cbf(struct evstomp_handle *h, enum evstomp_event_type et, struct frame *f) {
   switch (et) {
     case CONNECTED:
@@ -56,6 +78,7 @@ cbf(struct evstomp_handle *h, enum evstomp_event_type et, struct frame *f) {
       fprintf(stderr, "CALLBACK: Message: %s ------------------\n"
               "%s\n-----------------------\n",
                frame_get_header(f, "destination"), frame_get_body(f));
+      print_msg_body(frame_get_body(f));
       break;
   }
 }
