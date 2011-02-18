@@ -41,7 +41,7 @@ jmcstr_ftime_now(TALLOC_CTX *ctx, const char *fmt)
   struct tm *lt = localtime(&now);
   char timebuf[80];
   char *out;
-  strftime(timebuf, 80, fmt, lt);
+  strftime(timebuf, 80, fmt ? fmt : "%c", lt);
   out = talloc_strdup(ctx, timebuf);
   NULL_ABORT(out);
   return out;
