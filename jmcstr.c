@@ -1,5 +1,7 @@
 
+#include <sys/types.h>
 #include <string.h>
+#include <time.h>
 #include <talloc.h>
 
 #include "jmcstr.h"
@@ -29,5 +31,19 @@ jmcstr_split_lines(TALLOC_CTX *ctx, const char *in)
       break;
   }
   out[elems] = NULL;
+  return out;
+}
+
+char *
+jmcstr_ftime_now(TALLOC_CTX *ctx, const char *fmt)
+{
+  time_t now = time(NULL);
+  struct tm *lt = localtime(&now);
+  char timebuf[80];
+  char *out;
+  strftime(timebuf, 80, fmt, lt);
+  out = talloc_strdup(ctx, timebuf);
+  NULL_ABORT(out);
+  return out;
 }
 

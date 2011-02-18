@@ -91,7 +91,6 @@ frame_get_body(struct frame *f) {
 void
 process_frame(struct evstomp_handle *h, struct frame *f) {
   struct evbuffer *output = bufferevent_get_output(h->bev);
-  fprintf(stderr, "DEBUG: processing frame: '%s'\n", f->type);
   if (strcmp(f->type, "CONNECTED") == 0) {
     if (frame_get_header(f, "session") != NULL) {
       h->sessionid = talloc_strdup(h, frame_get_header(f, "session"));

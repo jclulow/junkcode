@@ -51,7 +51,7 @@ print_msg_body(const char *body)
 {
   regex_t re_msg, re_sbj;
   char **p, **s = jmcstr_split_lines(NULL, body);
-  char *msg = NULL, *sbj = NULL;
+  char *msg = NULL, *sbj = NULL, *dat = NULL;
   regcomp(&re_msg, "^Message: *(.*)$", REG_EXTENDED);
   regcomp(&re_sbj, "^Subject: *(.*)$", REG_EXTENDED);
   for (p = s; *p != NULL; p++) {
@@ -62,8 +62,11 @@ print_msg_body(const char *body)
       sbj = talloc_strndup(s, *p + m[1].rm_so, m[1].rm_eo - m[1].rm_so);
     }
   }
-  fprintf(stderr, "CBMSG: sbj -> '%s'\n"
-                  "       msg -> '%s'\n", sbj, msg);
+  dat = jmcstr_ftime_now(s, NULL);
+  fprintf(stdout, "-------------------------------------------\n"
+                  "Date:    %s\n"
+                  "Subject: %s\n"
+                  "Message: %s\n\n", dat, sbj, msg);
   talloc_free(s);
 }
 
@@ -75,9 +78,9 @@ cbf(struct evstomp_handle *h, enum evstomp_event_type et, struct frame *f) {
       evstomp_subscribe(h, "/topic/notifications");
       break;
     case MESSAGE:
-      fprintf(stderr, "CALLBACK: Message: %s ------------------\n"
+      /* fprintf(stderr, "CALLBACK: Message: %s ------------------\n"
               "%s\n-----------------------\n",
-               frame_get_header(f, "destination"), frame_get_body(f));
+               frame_get_header(f, "destination"), frame_get_body(f)); */
       print_msg_body(frame_get_body(f));
       break;
   }
