@@ -41,7 +41,8 @@ struct evstomp_handle {
   int req_state;
   struct frame *incoming;
   char *sessionid;
-  void (*cbfunc)(struct evstomp_handle *, enum evstomp_event_type, struct frame *);
+  void (*cbfunc)(struct evstomp_handle *, enum evstomp_event_type, struct frame *, void *);
+  void *cbfuncarg;
 };
 
 void
@@ -90,21 +91,20 @@ frame_get_body(struct frame *f) {
 
 void
 process_frame(struct evstomp_handle *h, struct frame *f) {
-  struct evbuffer *output = bufferevent_get_output(h->bev);
   if (strcmp(f->type, "CONNECTED") == 0) {
     if (frame_get_header(f, "session") != NULL) {
       h->sessionid = talloc_strdup(h, frame_get_header(f, "session"));
     }
     if (h->cbfunc != NULL) {
-      (*h->cbfunc)(h, CONNECTED, f);
+      (*h->cbfunc)(h, CONNECTED, f, h->cbfuncarg);
     }
   } else if (strcmp(f->type, "MESSAGE") == 0) {
     if (h->cbfunc != NULL) {
-      (*h->cbfunc)(h, MESSAGE, f);
+      (*h->cbfunc)(h, MESSAGE, f, h->cbfuncarg);
     }
   } else if (strcmp(f->type, "ERROR") == 0) {
     if (h->cbfunc != NULL) {
-      (*h->cbfunc)(h, ERROR, f);
+      (*h->cbfunc)(h, ERROR, f, h->cbfuncarg);
     }
   }
 }
@@ -115,6 +115,8 @@ evstomp_eventcb(struct bufferevent *bev, short events, void *arg)
   struct evstomp_handle *h = arg;
   if (events & BEV_EVENT_CONNECTED) {
     h->req_state = 1;
+    if (h->incoming != NULL)
+      talloc_free(h->incoming);
     h->incoming = talloc_zero(h, struct frame);
   } else if (events & BEV_EVENT_ERROR) {
     fprintf(stderr, "ERROR: error while connecting\n");
@@ -126,7 +128,6 @@ void
 evstomp_readcb(struct bufferevent *bev, void *arg)
 {
   struct evstomp_handle *h = arg;
-  int n;
   struct evbuffer *input = bufferevent_get_input(bev);
   char *lineout;
   int cont = 1;
@@ -134,10 +135,9 @@ evstomp_readcb(struct bufferevent *bev, void *arg)
   char *bufa;
   int bufapos;
 
-  /*while ((n = evbuffer_remove(input, buf, sizeof(buf))) > 0) { */
   while (cont) {
     switch (h->req_state) {
-      case 1:
+      case 1: /* waiting for frame type line */
         lineout = evbuffer_readln(input, NULL, EVBUFFER_EOL_CRLF);
         if (lineout == NULL) {
           cont = 0;
@@ -151,7 +151,7 @@ evstomp_readcb(struct bufferevent *bev, void *arg)
           h->req_state = 2;
         }
         break;
-      case 2:
+      case 2: /* read all header input lines */
         lineout = evbuffer_readln(input, NULL, EVBUFFER_EOL_CRLF);
         if (lineout == NULL) {
           cont = 0;
@@ -181,7 +181,7 @@ evstomp_readcb(struct bufferevent *bev, void *arg)
         }
         free(lineout);
         break;
-      case 3:
+      case 3: /* reading message body */
         /* ensure buffer is a contiguous block of memory
              so that we can search for the NUL */
         bufa = evbuffer_pullup(input, -1);
@@ -221,8 +221,10 @@ evstomp_subscribe(struct evstomp_handle *h, char *topic)
 
 void
 evstomp_setcb(struct evstomp_handle *h,
-    void (*cbfunc)(struct evstomp_handle *, enum evstomp_event_type, struct frame *))
+    void (*cbfunc)(struct evstomp_handle *, enum evstomp_event_type,
+    struct frame *, void *arg), void *arg)
 {
+  h->cbfuncarg = arg;
   h->cbfunc = cbfunc;
 }
 
@@ -240,12 +242,9 @@ evstomp_handle_destructor(void *ptr)
 struct evstomp_handle *
 evstomp_init(struct event_base *base, char *hostname, int port)
 {
-  struct event *es1, *es2, *es3;
-  struct sockaddr* sa;
-  struct connstate* cs;
   struct evstomp_handle *h;
 
-  h = talloc(NULL, struct evstomp_handle);
+  h = talloc_zero(ctx, struct evstomp_handle);
   if (h == NULL) {
     return NULL;
   }
@@ -254,6 +253,7 @@ evstomp_init(struct event_base *base, char *hostname, int port)
   if (regcomp(&h->re_parse_header, "[ ]*([^:]+)[ ]*:[ ]*(.+)[ ]*",
       REG_EXTENDED) != 0) {
     talloc_free(h);
+    return NULL;
   }
 
   h->bev = bufferevent_socket_new(base, -1, BEV_OPT_CLOSE_ON_FREE);

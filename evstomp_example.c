@@ -71,7 +71,7 @@ print_msg_body(const char *body)
 }
 
 void
-cbf(struct evstomp_handle *h, enum evstomp_event_type et, struct frame *f) {
+cbf(struct evstomp_handle *h, enum evstomp_event_type et, struct frame *f, void *arg) {
   switch (et) {
     case CONNECTED:
       fprintf(stderr, "CALLBACK: Connected, subscribing to the thing.\n");
@@ -83,6 +83,8 @@ cbf(struct evstomp_handle *h, enum evstomp_event_type et, struct frame *f) {
                frame_get_header(f, "destination"), frame_get_body(f)); */
       print_msg_body(frame_get_body(f));
       break;
+    default:
+      return;
   }
 }
 
@@ -97,7 +99,7 @@ main(int argc, char **argv)
 
   base = event_base_new();
   h = evstomp_init(base, "atlantis.sysmgr.org", 61613);
-  evstomp_setcb(h, cbf);
+  evstomp_setcb(h, cbf, NULL);
   if (h == NULL) {
     fprintf(stderr, "Could not open stomp library.\n");
     abort();

@@ -38,7 +38,9 @@ const char * frame_get_body(struct frame *f);
 
 struct evstomp_handle;
 struct evstomp_handle *evstomp_init(struct event_base *base, char *hostname, int port);
-void evstomp_setcb(struct evstomp_handle *h, void (*func)(struct evstomp_handle *, enum evstomp_event_type, struct frame *));
+void evstomp_setcb(struct evstomp_handle *h, void (*func)
+    (struct evstomp_handle *, enum evstomp_event_type, struct frame *,
+    void *arg), void *arg);
 
 /*
  * evstomp_subscribe():
