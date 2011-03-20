@@ -77,6 +77,10 @@ cbf(struct evstomp_handle *h, enum evstomp_event_type et, struct frame *f, void 
       fprintf(stderr, "CALLBACK: Connected, subscribing to the thing.\n");
       evstomp_subscribe(h, "/topic/notifications");
       break;
+    case DISCONNECTED:
+      fprintf(stderr, "CALLBACK: Disconnected!\n");
+      evstomp_subscribe(h, "/topic/notifications");
+      break;
     case MESSAGE:
       /* fprintf(stderr, "CALLBACK: Message: %s ------------------\n"
               "%s\n-----------------------\n",
@@ -98,7 +102,7 @@ main(int argc, char **argv)
   talloc_enable_leak_report_full();
 
   base = event_base_new();
-  h = evstomp_init(base, "atlantis.sysmgr.org", 61613);
+  h = evstomp_init(NULL, base, "atlantis.sysmgr.org", 61613, NULL);
   evstomp_setcb(h, cbf, NULL);
   if (h == NULL) {
     fprintf(stderr, "Could not open stomp library.\n");

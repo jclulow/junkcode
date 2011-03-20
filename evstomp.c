@@ -22,6 +22,11 @@
 
 #include "evstomp.h"
 
+
+#define REGEX_HEADER_LINE "[ ]*([^:]+)[ ]*:[ ]*(.+)[ ]*"
+#define REGEX_HEADER_LINE_GROUPS 3
+#define FRAME_CONNECT "CONNECT\n\n"
+
 struct header {
   char *name;
   char *value;
@@ -38,12 +43,19 @@ struct evstomp_handle {
   struct event_base *base;
   regex_t re_parse_header;
   struct bufferevent *bev;
+  struct event *reconn;
   int req_state;
   struct frame *incoming;
   char *sessionid;
   void (*cbfunc)(struct evstomp_handle *, enum evstomp_event_type, struct frame *, void *);
   void *cbfuncarg;
+  char *hostname;
+  int port;
 };
+
+/* forward decls */
+static int reconnect(struct evstomp_handle *h);
+static void schedule_reconnect(struct evstomp_handle *h);
 
 void
 frame_set_header(struct frame *f, char* name, char* value)
@@ -91,6 +103,7 @@ frame_get_body(struct frame *f) {
 
 void
 process_frame(struct evstomp_handle *h, struct frame *f) {
+  /* struct evbuffer *output = bufferevent_get_output(h->bev); */
   if (strcmp(f->type, "CONNECTED") == 0) {
     if (frame_get_header(f, "session") != NULL) {
       h->sessionid = talloc_strdup(h, frame_get_header(f, "session"));
@@ -109,6 +122,29 @@ process_frame(struct evstomp_handle *h, struct frame *f) {
   }
 }
 
+static void sr_cbf(evutil_socket_t fd, short what, void *arg)
+{
+  struct evstomp_handle *h = arg;
+  if (what & EV_TIMEOUT) {
+    fprintf(stderr, "INFO: reconnecting...\n");
+    if (!reconnect(h)) {
+      schedule_reconnect(h);
+    } else {
+      fprintf(stderr, "INFO: reconnect launched...\n");
+    }
+  } else {
+    fprintf(stderr, "INFO: spurious call of sr_cbf()...\n");
+  }
+}
+
+static void
+schedule_reconnect(struct evstomp_handle *h)
+{
+  struct timeval five_seconds = {5,0};
+  fprintf(stderr, "INFO: reconnecting in 5 seconds ...\n");
+  event_add(h->reconn, &five_seconds);
+}
+
 void
 evstomp_eventcb(struct bufferevent *bev, short events, void *arg)
 {
@@ -119,8 +155,25 @@ evstomp_eventcb(struct bufferevent *bev, short events, void *arg)
       talloc_free(h->incoming);
     h->incoming = talloc_zero(h, struct frame);
   } else if (events & BEV_EVENT_ERROR) {
-    fprintf(stderr, "ERROR: error while connecting\n");
-    exit(1);
+    fprintf(stderr, "ERROR: BEV_EVENT_ERROR\n");
+    (*h->cbfunc)(h, ERROR, NULL, h->cbfuncarg);
+    schedule_reconnect(h);
+
+  } else if (events & BEV_EVENT_EOF) {
+    fprintf(stderr, "DEBUG: BEV_EVENT_EOF\n");
+    (*h->cbfunc)(h, DISCONNECTED, NULL, h->cbfuncarg);
+    schedule_reconnect(h);
+
+  } else if (events & BEV_EVENT_TIMEOUT) {
+    fprintf(stderr, "DEBUG: BEV_EVENT_TIMEOUT\n");
+    /* XXX: SEND A NOOP FRAME (WHAT WOULD THAT BE) */
+
+  } else if (events & BEV_EVENT_READING) {
+    fprintf(stderr, "DEBUG: BEV_EVENT_READING\n");
+
+  } else if (events & BEV_EVENT_WRITING) {
+    fprintf(stderr, "DEBUG: BEV_EVENT_WRITING\n");
+
   }
 }
 
@@ -158,11 +211,10 @@ evstomp_readcb(struct bufferevent *bev, void *arg)
         } else if (strlen(lineout) == 0) {
           h->req_state = 3;
         } else if (strstr(lineout, ":") != NULL) {
-#define REGMATCH_LEN 5
-          regmatch_t m[REGMATCH_LEN];
+          regmatch_t m[REGEX_HEADER_LINE_GROUPS];
           char *a, *b;
           if (regexec(&h->re_parse_header, lineout,
-              REGMATCH_LEN, m, 0) != 0) {
+              REGEX_HEADER_LINE_GROUPS, m, 0) != 0) {
             fprintf(stderr, "DEBUG: header line did not match regex: %s\n",
                 lineout);
           } else {
@@ -174,7 +226,6 @@ evstomp_readcb(struct bufferevent *bev, void *arg)
             talloc_free(a);
             talloc_free(b);
 	  }
-#undef REGMATCH_LEN
         } else {
           fprintf(stderr, "INFO: MSG %s: non-HDR '%s'\n",
               h->incoming->type, lineout);
@@ -209,8 +260,9 @@ evstomp_readcb(struct bufferevent *bev, void *arg)
 int
 evstomp_subscribe(struct evstomp_handle *h, char *topic)
 {
-  char *tosend = talloc_asprintf(h, "SUBSCRIBE\ndestination: %s\nack: auto\n\n\0", topic);
-  int rc = evbuffer_add(bufferevent_get_output(h->bev), tosend, strlen(tosend) + 1);
+  char *tosend = talloc_asprintf(h, "SUBSCRIBE\ndestination: %s\nack: auto\n\n", topic);
+  int rc = evbuffer_add(bufferevent_get_output(h->bev), tosend,
+      strlen(tosend) + 1); /*include terminating NULL */
   talloc_free(tosend);
   if (rc == 0)
     return 0;
@@ -236,12 +288,50 @@ evstomp_handle_destructor(void *ptr)
   if (h->bev != NULL) {
     bufferevent_free(h->bev);
   }
+  if (h->reconn != NULL) {
+    event_free(h->reconn);
+  }
   return 0;
 }
 
-struct evstomp_handle *
-evstomp_init(struct event_base *base, char *hostname, int port)
+static int/* struct bufferevent * */
+reconnect(struct evstomp_handle *h)
 {
+  if (h->bev != NULL) {
+    /* free existing bufferevent */
+    bufferevent_free(h->bev);
+  }
+  if (h->sessionid != NULL) {
+    talloc_free(h->sessionid);
+    h->sessionid = NULL;
+  }
+
+  h->bev = bufferevent_socket_new(h->base, -1, BEV_OPT_CLOSE_ON_FREE);
+  if (h->bev == NULL) {
+    /* XXX don't retry, this shouldn't fail */
+    return 0;
+  }
+
+  evbuffer_add(bufferevent_get_output(h->bev), FRAME_CONNECT, sizeof(FRAME_CONNECT));
+  /* XXX check return */
+  bufferevent_setcb(h->bev, evstomp_readcb, NULL, evstomp_eventcb,
+      h);
+  if (bufferevent_socket_connect_hostname(h->bev, NULL, AF_INET,
+      h->hostname, h->port) < 0) {
+    /* talloc_free(h); */
+    return 0;
+  }
+  bufferevent_enable(h->bev, EV_READ|EV_WRITE);
+  return 1;
+}
+
+struct evstomp_handle *
+evstomp_init(TALLOC_CTX *ctx, struct event_base *base, char *hostname,
+    int port, char **err_str)
+{
+  /* struct event *es1, *es2, *es3; */
+  /* struct sockaddr* sa; */
+  /* struct connstate* cs; */
   struct evstomp_handle *h;
 
   h = talloc_zero(ctx, struct evstomp_handle);
@@ -250,28 +340,28 @@ evstomp_init(struct event_base *base, char *hostname, int port)
   }
   talloc_set_destructor(h, evstomp_handle_destructor);
   h->base = base;
-  if (regcomp(&h->re_parse_header, "[ ]*([^:]+)[ ]*:[ ]*(.+)[ ]*",
+  if (regcomp(&h->re_parse_header, REGEX_HEADER_LINE,
       REG_EXTENDED) != 0) {
     talloc_free(h);
     return NULL;
   }
+  h->hostname = talloc_strdup(h, hostname);
+  h->port = port;
+  /* XXX validate hostname and port */
+  h->reconn = evtimer_new(h->base, sr_cbf, h);
+  if (h->reconn == NULL) {
+    talloc_free(h);
+    return NULL;
+  }
 
-  h->bev = bufferevent_socket_new(base, -1, BEV_OPT_CLOSE_ON_FREE);
-  if (h->bev == NULL) {
+  if (!reconnect(h)) {
+    if (err_str != NULL)
+      *err_str = talloc_strdup(ctx, "could not make initial connection to server");
+    else
+      fprintf(stderr, "ERROR: could not make initial connection to server\n");
     talloc_free(h);
     return NULL;
   }
-#define TOSEND "CONNECT\n\n"
-  evbuffer_add(bufferevent_get_output(h->bev), TOSEND, sizeof(TOSEND));
-#undef  TOSEND
-  bufferevent_setcb(h->bev, evstomp_readcb, NULL, evstomp_eventcb,
-      h);
-  if (bufferevent_socket_connect_hostname(h->bev, NULL, AF_INET, hostname,
-      port) < 0) {
-    talloc_free(h);
-    return NULL;
-  }
-  bufferevent_enable(h->bev, EV_READ|EV_WRITE);
 
   return h;
 }

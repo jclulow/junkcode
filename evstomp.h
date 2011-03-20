@@ -26,7 +26,8 @@
 enum evstomp_event_type {
   CONNECTED,
   MESSAGE,
-  ERROR
+  ERROR,
+  DISCONNECTED
 };
 
 struct header;
@@ -37,7 +38,8 @@ const char * frame_get_header(struct frame *f, char* name);
 const char * frame_get_body(struct frame *f);
 
 struct evstomp_handle;
-struct evstomp_handle *evstomp_init(struct event_base *base, char *hostname, int port);
+struct evstomp_handle *evstomp_init(TALLOC_CTX *ctx, struct event_base *base,
+    char *hostname, int port, char **err_str);
 void evstomp_setcb(struct evstomp_handle *h, void (*func)
     (struct evstomp_handle *, enum evstomp_event_type, struct frame *,
     void *arg), void *arg);
